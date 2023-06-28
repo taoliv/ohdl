@@ -24,7 +24,11 @@ class GiteeApi:
     def get_commits_sha(self, owner: str, repo: str,
                         since=None, until=None) -> List[str]:
         commits = self._get_commits(owner, repo, since=since, until=until)
-        sha_list = [commit['sha'] for commit in commits]
+        try:
+            sha_list = [commit['sha'] for commit in commits]
+        except:
+            print(commits)
+            return []
         return sha_list
     
     def get_latest_commit_sha(self, owner: str, repo: str, 
