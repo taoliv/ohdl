@@ -2,6 +2,7 @@ import argparse
 import datetime
 
 from .gitee_api import GiteeApi
+from .sha_cache import ShaCache
 from .ohdl import download_oh
 
 def main():
@@ -15,7 +16,11 @@ def main():
     args = parser.parse_args()
 
     api = GiteeApi(args.access_token)
-    download_oh(args.oh_path, api, since=args.since, until=args.until, no_sync=args.no_sync)
+
+    sha_cache = ShaCache()
+    sha_cache.load(ShaCache.path_from_oh_dir(args.oh_path), ShaCache.entry_from_date(args.since, args.until))
+
+    download_oh(args.oh_path, api, sha_cache, since=args.since, until=args.until, no_sync=args.no_sync)
 
 if __name__ == "__main__":
     main()

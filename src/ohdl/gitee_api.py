@@ -32,7 +32,7 @@ class GiteeApi:
         return sha_list
     
     def get_latest_commit_sha(self, owner: str, repo: str, 
-                               since: datetime, until: datetime) -> Optional[str]:
+                               since: datetime | None, until: datetime | None) -> Optional[str]:
         sha_list = self.get_commits_sha(owner, repo, since=since, until=until)
         if not sha_list:
             return None

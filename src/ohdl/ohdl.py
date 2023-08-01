@@ -4,39 +4,9 @@ from xml.etree import ElementTree
 from datetime import datetime
 
 from .gitee_api import GiteeApi
+from .sha_cache import ShaCache
 
-def _load_or_init_sha_cache(oh_path: str, since: datetime, until: datetime) -> dict:
-    sha_cache_path = os.path.join(oh_path, '.sha_cache')
-    sha_cache = {}
-    sha_cache_entry = _sha_cache_entry(since, until)
-
-    if os.path.exists(sha_cache_path) and os.path.isfile(sha_cache_path):
-        sha_cache = eval(open(sha_cache_path, 'r').read())
-    if sha_cache_entry not in sha_cache:
-        sha_cache[sha_cache_entry] = {}
-    return sha_cache
-
-def _save_sha_cache(oh_path: str, sha_cache):
-    open(os.path.join(oh_path, '.sha_cache'), 'w').write(str(sha_cache))
-
-def _sha_cache_entry(since: datetime, until: datetime) -> str:
-    return f'{since} to {until}'
-
-def _get_sha_from_cache(sha_cache, project: str, since: datetime, until: datetime) -> Optional[str]:
-    sha_cache_entry = _sha_cache_entry(since, until)
-    if project in sha_cache[sha_cache_entry]:
-        return sha_cache[sha_cache_entry][project]['sha']
-    else:
-        return None
-    
-def _add_sha_cache(sha_cache, sha: str, project_name: str, project_path: str, since: datetime, until: datetime):
-    sha_cache_entry = _sha_cache_entry(since, until)
-    sha_cache[sha_cache_entry][project_name] = {
-        'path': project_path,
-        'sha': sha
-    }
-
-def _get_latest_commit_sha(api: GiteeApi, project: str, since: datetime, until: datetime) -> Optional[str]:
+def _get_latest_commit_sha(api: GiteeApi, project: str, since: datetime | None, until: datetime | None) -> Optional[str]:
     print(f'getting latest commit in {project} from {since} to {until}')
     sha = api.get_latest_commit_sha('openharmony', project, since, until)
     if not sha:
@@ -84,7 +54,7 @@ def _parse_projects_from_xml(base: str, xml_path: str, projects: List[dict]):
         include = e.attrib['name']
         _parse_projects_from_xml(base, include, projects)
 
-def download_oh(oh_path: str, api: GiteeApi, 
+def download_oh(oh_path: str, api: GiteeApi, sha_cache: ShaCache,
                 since=None, until=None,
                 no_sync=False) -> None:
     if not os.path.exists(oh_path):
@@ -97,8 +67,6 @@ def download_oh(oh_path: str, api: GiteeApi,
     print(f'change to path: {oh_path}')
     os.chdir(oh_path)
 
-    sha_cache = _load_or_init_sha_cache(oh_path, since, until)
-
     if '.repo' not in os.listdir(oh_path):
         init_cmd = 'repo init -u https://gitee.com/openharmony/manifest.git -b master -m default.xml --no-clone-bundle --no-repo-verify'
         print(init_cmd)
@@ -110,15 +78,15 @@ def download_oh(oh_path: str, api: GiteeApi,
     manifests_path = os.path.join(oh_path, '.repo/manifests')
 
     if since or until:
-        sha = _get_sha_from_cache(sha_cache, 'manifest', since, until)
+        sha = sha_cache.get(ShaCache.entry_from_date(since, until), 'manifest')
         if sha is None:
             sha = _get_latest_commit_sha(api, 'manifest', since, until)
             if sha is None:
                 return
-            _add_sha_cache(sha_cache, sha, 'manifest', '.repo/manifests', since, until)
+            sha_cache.add(sha, ShaCache.entry_from_date(since, until), 'manifest', '.repo/manifests')
 
         if not _git_reset_by_sha(manifests_path, sha):
-            _save_sha_cache(oh_path, sha_cache)
+            sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
             return
 
     if not no_sync:
@@ -134,19 +102,19 @@ def download_oh(oh_path: str, api: GiteeApi,
         _parse_projects_from_xml(manifests_path, 'default.xml', projects)
 
         for project in projects:
-            project_sha = _get_sha_from_cache(sha_cache, project['name'], since, until)
+            project_sha = sha_cache.get(ShaCache.entry_from_date(since, until), project['name'])
             if project_sha is None:
                 project_sha = _get_latest_commit_sha(api, project['name'], since, until)
                 if project_sha is None:
-                    _save_sha_cache(oh_path, sha_cache)
+                    sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
                     return
-                _add_sha_cache(sha_cache, project_sha, project['name'], project['path'], since, until)
-        _save_sha_cache(oh_path, sha_cache)
+                sha_cache.add(project_sha, ShaCache.entry_from_date(since, until), project['name'], project['path'])
+        sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
 
         for project in projects:
-            project_sha = _get_sha_from_cache(sha_cache, project['name'], since, until)
+            project_sha = sha_cache.get(ShaCache.entry_from_date(since, until), project['name'])
             print(f'{project}: sha is {project_sha}')
-            if not _git_reset_by_sha(os.path.join(oh_path, project['path']), project_sha):
+            if not project_sha or not _git_reset_by_sha(os.path.join(oh_path, project['path']), project_sha):
                 return
         
     cmds = [
