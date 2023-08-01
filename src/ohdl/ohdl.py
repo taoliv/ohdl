@@ -1,4 +1,5 @@
 import os
+import subprocess
 from typing import List, Optional
 from xml.etree import ElementTree
 from datetime import datetime
@@ -54,7 +55,22 @@ def _parse_projects_from_xml(base: str, xml_path: str, projects: List[dict]):
         include = e.attrib['name']
         _parse_projects_from_xml(base, include, projects)
 
+def _get_local_sha(project_path: str) -> str | None:
+    print(f'getting local sha in {project_path}')
+    if not os.path.exists(project_path):
+        print(f'{project_path} not exists')
+        return None
+
+    out = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=project_path)
+    out = out.decode("utf-8").strip()
+    if out.startswith('fatal'):
+        print(f'error: {out}')
+        return None
+    else:
+        return out
+
 def download_oh(oh_path: str, api: GiteeApi, sha_cache: ShaCache,
+                entry=None,
                 since=None, until=None,
                 no_sync=False) -> None:
     if not os.path.exists(oh_path):
@@ -67,6 +83,14 @@ def download_oh(oh_path: str, api: GiteeApi, sha_cache: ShaCache,
     print(f'change to path: {oh_path}')
     os.chdir(oh_path)
 
+    _entry = ''
+    if entry:
+        _entry = entry
+    else:
+        _entry = ShaCache.entry_from_date(since, until)
+
+    sha_cache.load(ShaCache.path_from_oh_dir(oh_path), _entry)
+
     if '.repo' not in os.listdir(oh_path):
         init_cmd = 'repo init -u https://gitee.com/openharmony/manifest.git -b master -m default.xml --no-clone-bundle --no-repo-verify'
         print(init_cmd)
@@ -77,16 +101,20 @@ def download_oh(oh_path: str, api: GiteeApi, sha_cache: ShaCache,
         
     manifests_path = os.path.join(oh_path, '.repo/manifests')
 
-    if since or until:
-        sha = sha_cache.get(ShaCache.entry_from_date(since, until), 'manifest')
+    if entry or since or until:
+        sha = sha_cache.get(_entry, 'manifest')
         if sha is None:
+            if entry is not None:
+                print("project manifest sha is not found in custom entry")
+                return
             sha = _get_latest_commit_sha(api, 'manifest', since, until)
             if sha is None:
                 return
-            sha_cache.add(sha, ShaCache.entry_from_date(since, until), 'manifest', '.repo/manifests')
+            sha_cache.add(sha, _entry, 'manifest', '.repo/manifests')
 
         if not _git_reset_by_sha(manifests_path, sha):
-            sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
+            if entry is None:
+                sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
             return
 
     if not no_sync:
@@ -97,22 +125,26 @@ def download_oh(oh_path: str, api: GiteeApi, sha_cache: ShaCache,
             print(f'error = {res}')
             return
 
-    if since or until:
+    if entry or since or until:
         projects = []
         _parse_projects_from_xml(manifests_path, 'default.xml', projects)
 
         for project in projects:
-            project_sha = sha_cache.get(ShaCache.entry_from_date(since, until), project['name'])
+            project_sha = sha_cache.get(_entry, project['name'])
             if project_sha is None:
+                if entry is not None:
+                    print(f"project {project['name']} sha is not found in custom entry")
+                    return
                 project_sha = _get_latest_commit_sha(api, project['name'], since, until)
                 if project_sha is None:
                     sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
                     return
-                sha_cache.add(project_sha, ShaCache.entry_from_date(since, until), project['name'], project['path'])
-        sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
+                sha_cache.add(project_sha, _entry, project['name'], project['path'])
+        if entry is None:
+            sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
 
         for project in projects:
-            project_sha = sha_cache.get(ShaCache.entry_from_date(since, until), project['name'])
+            project_sha = sha_cache.get(_entry, project['name'])
             print(f'{project}: sha is {project_sha}')
             if not project_sha or not _git_reset_by_sha(os.path.join(oh_path, project['path']), project_sha):
                 return
@@ -127,4 +159,33 @@ def download_oh(oh_path: str, api: GiteeApi, sha_cache: ShaCache,
         if res:
             print(f'error = {res}')
             return
-        
+
+def save_sha_cache(oh_path: str, sha_cache: ShaCache, entry: str):
+    if not os.path.exists(oh_path):
+        print(f'{oh_path} not exists')
+        return
+    if not os.path.isdir(oh_path):
+        print(f'{oh_path} is not a directory')
+        return
+
+    print(f'change to path: {oh_path}')
+    os.chdir(oh_path)
+
+    sha_cache.load(ShaCache.path_from_oh_dir(oh_path), entry)
+
+    manifests_path = os.path.join(oh_path, '.repo/manifests')
+    sha = _get_local_sha(manifests_path)
+    if not sha:
+        return
+    else:
+        sha_cache.add(sha, entry, 'manifest', '.repo/manifests')
+
+    projects = []
+    _parse_projects_from_xml(manifests_path, 'default.xml', projects)
+    for project in projects:
+        project_sha = _get_local_sha(os.path.join(oh_path, project['path']))
+        if project_sha is None:
+            sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
+            return
+        sha_cache.add(project_sha, entry, project['name'], project['path'])
+    sha_cache.save(ShaCache.path_from_oh_dir(oh_path))
