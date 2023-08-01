@@ -38,6 +38,12 @@ def _git_reset_by_sha(project_path: str, sha: str) -> bool:
         if res:
             print(f'error = {res}')
             return False
+
+    update_ref_cmd = f'git update-ref refs/remotes/origin/master {sha}';
+    print(update_ref_cmd)
+    res = os.system(update_ref_cmd)
+    if res:
+        print(f'error = {res}')
     
     print(f'change to path: {cwd}')
     os.chdir(cwd)
